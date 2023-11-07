@@ -1,5 +1,7 @@
 from collections import Counter
+from itertools import combinations
 import re
+from typing import Dict, List, Optional
 
 cocktail_ingredients = {
     "Alexander": ["3 cl cognac", "3 cl brown crème de cacao", "3 cl light cream"],
@@ -459,21 +461,84 @@ group_name = 'ing'
 # ml
 # oz
 # cl
-volume_regex = re.compile('(\d+|(\d+)?\.\d+|(\d+ )?\d+?/\d+|one|two) ?(ml|cl|oz|dash(es)?|bar ?spoon(s)?|ounce|tsp|drop(s)?) (?P<ing>.*)', flags=re.IGNORECASE)
-parts_regex = re.compile('\(.* part(s)?\) (?P<ing>.*)', flags=re.IGNORECASE)
+volume_regex = re.compile('(\d+|(\d+)?\.\d+|(\d+ )?\d+?/\d+|one|two) ?(ml|cl|oz|dash(es)?|bar ?spoon(s)?|ounce|tsp|drop(s)?|teaspoon(s)?) (?P<ing>.*)', flags=re.IGNORECASE)
+parts_regex = re.compile('(\()?.* part(s)?(\))? (?P<ing>.*)', flags=re.IGNORECASE)
+static_matches = {
+    "london dry gin": "gin",
+    "gin (old tom)": "gin",
+    "freshly squeezed lemon juice": "lemon juice",
+    "fresh lemon juice": "lemon juice",
+    "lemon juice, fresh": "lemon juice",
+    "vodka citron": "vodka",
+    "vodka vanilla": "vodka",
+    "freshly squeezed lime juice": "lime juice",
+    "fresh lime juice": "lime juice",
+    "cola to top up": "cola",
+    "red vermouth": "sweet red vermouth",
+    "sweet vermouth": "sweet red vermouth",
+    "sugar (or 2 cl of sugar syrup)": "sugar",
+    "bourbon whiskey": "bourbon",
+    "bourbon or rye whiskey": "bourbon",
+    "whiskey (rye or bourbon)": "bourbon",
+    "fernet-branca": "fernet branca",
+    "cointreau (curaçao)": "cointreau",
+    "blended scotch whiskey": "scotch whiskey",
+    "scotch whisky": "scotch whiskey",
+    "fresh pineapple juice": "pineapple juice",
+    "fresh orange juice": "orange juice",
+    "maraschino": "maraschino liqueur",
+    "dash angostura bitters": "angostura bitters",
+    "dash of angostura bitter (optional)": "angostura bitters",
+    "3 or 4 dashes angostura bitters": "angostura bitters",
+    "jamaica overproof white rum": "white rum",
+    "mezcal (espadín)": "mezcal"
+}
+
+def substring_matches(ingredient: str) -> Optional[str]:
+    if "mint" in ingredient:
+        return "mint"
+    elif "egg white" in ingredient:
+        return "egg white"
+    elif "sugar" in ingredient:
+        return "sugar"
+    elif "honey" in ingredient:
+        return "honey"
+    else:
+        return None
+
+
 
 def strip_measurement(ingredient: str) -> str:
+    substring_match = substring_matches(ingredient)
+    if substring_match:
+        return substring_match
+
     volume_match = volume_regex.match(ingredient)
     parts_match = parts_regex.match(ingredient)
     if volume_match is not None:
         stripped_ingredient = volume_match.group(group_name)
         volume_parts_match = parts_regex.match(stripped_ingredient)
         if volume_parts_match is not None:
-            return volume_parts_match.group(group_name)
+            volume_ingredient = volume_parts_match.group(group_name)
+            if volume_ingredient in static_matches:
+                return static_matches[volume_ingredient]
+            else:
+                return volume_ingredient
+        elif stripped_ingredient in static_matches:
+            return static_matches[stripped_ingredient]
         return stripped_ingredient
     elif parts_match is not None:
         return parts_match.group(group_name)
+    elif ingredient in static_matches:
+        return static_matches[ingredient]
     return ingredient
+
+
+def simplify_ingredients(ingredients: List[str]) -> List[str]:
+    """
+    Strip measurements/details from a list of ingredients
+    """
+    return [strip_measurement(ingredient.lower().strip()).strip() for ingredient in ingredients]
 
 
 def most_frequent():
@@ -484,12 +549,100 @@ def most_frequent():
     return frequencies
 
 
-def largest_subset():
-    return []
+def build_matrix(canonical_cocktails: List[str]) -> (List[List[bool]], List[str]):
+    """
+    """
+    # Build ingredients set
+    all_ingredients = set()
+    for ingredients in canonical_cocktails:
+        print(ingredients)
+        all_ingredients.update(ingredients)
+    print("All ingredients", len(all_ingredients))
+    all_ingredients = list(all_ingredients)
+    result = []
+    for ingredients in canonical_cocktails:
+        bool_ingredients = [True if ingredient in ingredients else False for ingredient in all_ingredients]
+        result.append(bool_ingredients)
+    return (result, all_ingredients)
+
+
+def filter_useless_ingredients(matrix: List[List[bool]]) -> (List[List[bool]], List[int], List[int]):
+    """
+    If an ingredient appears in at most one cocktail, there's no point keeping it.
+    Remove it, and any cocktails it appears in. Return the updated matrix, 
+    the list of removed columns, and the list of removed rows
+    """
+    culled_columns = []
+    culled_rows = []
+    for column in range(len(matrix[0])):
+        ingredient_usage = [cocktail[column] for cocktail in matrix]
+        true_rows = [j for j, b in enumerate(ingredient_usage) if b]
+        if (len(true_rows) <= 1):
+            # Cull the weak
+            culled_columns.append(column)
+            for row in true_rows:
+                culled_rows.append(row)
+    new_matrix = [[value for j, value in enumerate(row) if j not in culled_columns] 
+                    for i, row in enumerate(matrix) if i not in culled_rows]
+    return (new_matrix, culled_rows, culled_columns)
+
+
+def solve(matrix: List[List[bool]], n: int) -> (List[int], List[int]):
+    all_combinations = combinations(range(0, len(matrix[0])), n)
+    most_cocktails = []
+    best_combination = []
+    for combination in all_combinations:
+        # Count the number of cocktails that overlap
+        count = 0
+        cocktails_created = []
+        for row, drink in enumerate(matrix):
+            # If any non-combination index is True, stop
+            for i, value in enumerate(drink):
+                if value and not i in combination:
+                    break
+            else:
+                cocktails_created.append(row)
+                count += 1
+        if count > len(most_cocktails):
+            print(f"Updating best cocktail to combination: {combination}")
+            most_cocktails = cocktails_created
+            best_combination = combination
+    print(f"This combination can make {len(most_cocktails)} cocktails")
+    return (best_combination, most_cocktails)
+
+
+
+def largest_subset(n: int) -> List[str]:
+    """
+    Return the list of ingredients that allows the largest number of cocktails to be created
+    :param n: the number of ingredients to find
+    """
+    # Filter by cocktails that have at most n ingredients
+    possible = {drink: ingredients for drink, ingredients in cocktail_ingredients.items() if len(ingredients) <= n}
+    # Convert to a canonical ingredients list
+    simplified_cocktails = {drink: simplify_ingredients(ingredients) for drink, ingredients in possible.items()}
+    simplified_cocktail_names = list(simplified_cocktails.keys())
+    # Create the matrix
+    (matrix, simplified_cocktail_ingredients) = build_matrix(simplified_cocktails.values())
+    # print(simplified_cocktail_ingredients)
+    # Filter
+    new_matrix, culled_rows, culled_columns = filter_useless_ingredients(matrix)
+    simplified_cocktail_ingredients = [ingredient for i, ingredient in enumerate(simplified_cocktail_ingredients) if i not in culled_columns]
+    names = [name for i, name in enumerate(simplified_cocktail_names) if i not in culled_rows]
+    print(f"Went from {len(matrix)} cocktails to {len(new_matrix)} cocktails")
+    print(f"Went from {len(matrix[0])} ingredients to {len(new_matrix[0])} ingredients")
+    print(f"New ingredients list is {simplified_cocktail_ingredients}")
+    # Identify the most rows with the most numbers in common
+    best_combination, most_cocktails = solve(new_matrix, n)
+    best_ingredients = [simplified_cocktail_ingredients[i] for i in best_combination]
+    cocktail_names = [names[i] for i in most_cocktails]
+    return (best_ingredients, cocktail_names)
 
 def run(): 
-    return most_frequent()
+    return largest_subset(7)
 
 if __name__ == "__main__":
-    print(len(cocktail_ingredients))
-    print(run())
+    ingredients, names = run()
+    print(f"The best {len(ingredients)} ingredients are:")
+    print(", ".join(ingredients))
+    print(f"They make the {', '.join(names)}")
